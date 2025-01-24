@@ -1,0 +1,6 @@
+@DsWebServer_HostAddress = http://localhost:5192
+
+GET {{DsWebServer_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
