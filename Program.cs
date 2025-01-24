@@ -1,29 +1,3 @@
-//var builder = WebApplication.CreateBuilder(args);
-
-//// Add services to the container.
-
-//builder.Services.AddControllers();
-//// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-//builder.Services.AddEndpointsApiExplorer();
-//builder.Services.AddSwaggerGen();
-
-//var app = builder.Build();
-
-//// Configure the HTTP request pipeline.
-//if (app.Environment.IsDevelopment())
-//{
-//    app.UseSwagger();
-//    app.UseSwaggerUI();
-//}
-
-//app.UseAuthorization();
-
-//app.MapControllers();
-
-//app.Run();
-
-
-
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -52,6 +26,13 @@ namespace SimpleFramework
                 .ConfigureWebHostDefaults(webBuilder =>
                 {
                     webBuilder.UseStartup<Startup>();
+
+                    // 포트를 appsettings.json에서 읽어 설정
+                    var configuration = new ConfigurationBuilder()
+                        .AddJsonFile("appsettings.json")
+                        .Build();
+                    var port = configuration.GetValue<int>("Server:Port", 5000); // 기본값 5000
+                    webBuilder.UseUrls($"http://*:{port}");
                 });
     }
 
@@ -142,13 +123,14 @@ namespace SimpleFramework
 
     public class BaseResponse
     {
-        public int ResRet { get; set; } = 0;
+        public string Status { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
     }
 
     public class ResLogin : BaseResponse
     {
         public string Token { get; set; }
+        public int ProcessRet { get; set; } = 0;
     }
 
     public class ResLogOut : BaseResponse
@@ -172,6 +154,7 @@ namespace SimpleFramework
                 {
                     var errorResponse = new TResponse
                     {
+                        Status = "error",
                         Message = "Invalid request format"
                     };
                     context.Response.StatusCode = 400;
@@ -186,6 +169,7 @@ namespace SimpleFramework
             {
                 var errorResponse = new TResponse
                 {
+                    Status = "error",
                     Message = ex.Message
                 };
                 context.Response.StatusCode = 500;
@@ -200,6 +184,7 @@ namespace SimpleFramework
         {
             var response = new BaseResponse
             {
+                Status = "success",
                 Message = "Session processed"
             };
 
@@ -228,8 +213,9 @@ namespace SimpleFramework
 
             if (!string.IsNullOrEmpty(existingSession))
             {
+                response.Status = "error";
                 response.Message = "User is already logged in.";
-                response.ResRet = -1;
+                response.ProcessRet = -1;
                 return response;
             }
 
@@ -245,8 +231,9 @@ namespace SimpleFramework
 
             if (!userExists)
             {
+                response.Status = "error";
                 response.Message = "Invalid UserId or UserPass.";
-                response.ResRet = -1;
+                response.ProcessRet = -1;
                 return response;
             }
 
@@ -254,6 +241,7 @@ namespace SimpleFramework
             var token = Guid.NewGuid().ToString();
             await db.StringSetAsync(request.UserId, token, TimeSpan.FromMinutes(30));
 
+            response.Status = "success";
             response.Message = "Login successful.";
             response.Token = token;
 
@@ -267,6 +255,7 @@ namespace SimpleFramework
         {
             var response = new ResLogOut
             {
+                Status = "success",
                 Message = "Logout successful"
             };
 
