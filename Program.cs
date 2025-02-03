@@ -18,7 +18,13 @@ namespace SimpleFramework
     {
         public static void Main(string[] args)
         {
-            CreateHostBuilder(args).Build().Run();
+            var host = CreateHostBuilder(args).Build();
+
+            // Initialize RedisManager and DBManager
+            RedisManager.Initialize(host.Services.GetRequiredService<IConnectionMultiplexer>());
+            DBManager.Initialize(host.Services.GetRequiredService<IConfiguration>());
+
+            host.Run();
         }
 
         public static IHostBuilder CreateHostBuilder(string[] args) =>
@@ -47,11 +53,8 @@ namespace SimpleFramework
 
         public void ConfigureServices(IServiceCollection services)
         {
-            // Add Redis session management
-            services.AddStackExchangeRedisCache(options =>
-            {
-                options.Configuration = Configuration["Redis:ConnectionString"];
-            });
+            // Add Redis connection multiplexer as singleton
+            services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(Configuration["Redis:ConnectionString"]));
 
             services.AddSession(options =>
             {
@@ -59,10 +62,6 @@ namespace SimpleFramework
                 options.Cookie.HttpOnly = true;
                 options.Cookie.IsEssential = true;
             });
-
-            // Add MSSQL database connection
-            services.AddTransient<SqlConnection>(_ =>
-                new SqlConnection(Configuration.GetConnectionString("DefaultConnection")));
 
             services.AddControllers();
         }
@@ -86,6 +85,73 @@ namespace SimpleFramework
                     await controller.HandleRequest(context);
                 });
             });
+        }
+    }
+
+    public class RedisManager
+    {
+        private static IConnectionMultiplexer _redis;
+
+        public static void Initialize(IConnectionMultiplexer redis)
+        {
+            _redis = redis;
+        }
+
+        public static async Task<string> GetSessionAsync(string key)
+        {
+            var db = _redis.GetDatabase();
+            return await db.StringGetAsync(key);
+        }
+
+        public static async Task SetSessionAsync(string key, string value, TimeSpan expiry)
+        {
+            var db = _redis.GetDatabase();
+            await db.StringSetAsync(key, value, expiry);
+        }
+
+        public static async Task DeleteSessionAsync(string key)
+        {
+            var db = _redis.GetDatabase();
+            await db.KeyDeleteAsync(key);
+        }
+    }
+
+    public class UserDBInfo
+    {
+        public string UserID { get; set; }
+        public string UserPass { get; set; }
+        public int UserPoint { get; set; }
+        public int MaxScore { get; set; }
+        public DateTime CreateDate { get; set; }
+        public DateTime LetestDate { get; set; } = DateTime.Now;
+    }
+
+    public class DBManager
+    {
+        protected static string _connectionString;
+
+        public static void Initialize(IConfiguration configuration)
+        {
+            _connectionString = $"Server={configuration["Database:Ip"]},{configuration["Database:Port"]};Database={configuration["Database:DatabaseName"]};User Id={configuration["Database:UserId"]};Password={configuration["Database:Password"]};";
+        }
+
+        public SqlConnection GetConnection()
+        {
+            return new SqlConnection(_connectionString);
+        }
+    }
+
+    public class GameDBManager : DBManager
+    {
+        public static async Task<bool> AccountExistsAsync(string accountId)
+        {
+            using var connection = new SqlConnection(_connectionString);
+            using var command = new SqlCommand("EXEC CheckAccountExistence @AccountID", connection);
+            command.Parameters.AddWithValue("@AccountID", accountId);
+
+            await connection.OpenAsync();
+            var result = await command.ExecuteScalarAsync();
+            return result != null;
         }
     }
 
@@ -120,6 +186,13 @@ namespace SimpleFramework
     {
         public ReqLogOut() : base("api/auth/LogOut") { }
     }
+    public class ReqCreateUser : BaseRequest
+    {
+        public ReqCreateUser() : base("api/user/CreateUser") { }
+
+        public string UserId { get; set; }
+        public string UserPass { get; set; }
+    }
 
     public class BaseResponse
     {
@@ -135,6 +208,11 @@ namespace SimpleFramework
 
     public class ResLogOut : BaseResponse
     {
+    }
+
+    public class ResCreateUser : BaseResponse
+    {
+        public int ProcessRet { get; set; } = 0;
     }
 
     public abstract class BaseController<TRequest, TResponse>
@@ -194,22 +272,12 @@ namespace SimpleFramework
 
     public class LoginController : BaseController<ReqLogin, ResLogin>
     {
-        private readonly IConnectionMultiplexer _redis;
-        private readonly SqlConnection _sqlConnection;
-
-        public LoginController(IConnectionMultiplexer redis, SqlConnection sqlConnection)
-        {
-            _redis = redis;
-            _sqlConnection = sqlConnection;
-        }
-
         public override async Task<ResLogin> Process(ReqLogin request)
         {
             var response = new ResLogin();
 
             // Check Redis for existing session
-            var db = _redis.GetDatabase();
-            var existingSession = await db.StringGetAsync(request.UserId);
+            var existingSession = await RedisManager.GetSessionAsync(request.UserId);
 
             if (!string.IsNullOrEmpty(existingSession))
             {
@@ -219,27 +287,18 @@ namespace SimpleFramework
                 return response;
             }
 
-            // Check MSSQL for user credentials
-            var query = "SELECT COUNT(*) FROM UserInfo WHERE UserId = @UserId AND UserPass = @UserPass";
-            using var command = new SqlCommand(query, _sqlConnection);
-            command.Parameters.AddWithValue("@UserId", request.UserId);
-            command.Parameters.AddWithValue("@UserPass", request.UserPass);
-
-            await _sqlConnection.OpenAsync();
-            var userExists = (int)await command.ExecuteScalarAsync() > 0;
-            await _sqlConnection.CloseAsync();
-
-            if (!userExists)
-            {
-                response.Status = "error";
-                response.Message = "Invalid UserId or UserPass.";
-                response.ProcessRet = -1;
-                return response;
-            }
+            var accountExists = await GameDBManager.AccountExistsAsync(request.UserId);
+            //if (!string.IsNullOrEmpty(accountExists))
+            //{
+            //    response.Status = "error";
+            //    response.Message = "User does not exist.";
+            //    response.ProcessRet = -1;
+            //    return response;
+            //}
 
             // Create new session in Redis
             var token = Guid.NewGuid().ToString();
-            await db.StringSetAsync(request.UserId, token, TimeSpan.FromMinutes(30));
+            await RedisManager.SetSessionAsync(request.UserId, token, TimeSpan.FromMinutes(30));
 
             response.Status = "success";
             response.Message = "Login successful.";
