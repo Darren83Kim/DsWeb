@@ -11,6 +11,8 @@ using Microsoft.Data.SqlClient;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Dapper;
+using System.Data;
 
 namespace SimpleFramework
 {
@@ -143,15 +145,16 @@ namespace SimpleFramework
 
     public class GameDBManager : DBManager
     {
-        public static async Task<bool> AccountExistsAsync(string accountId)
+        public static async Task<UserDBInfo> AccountExistsAsync(string accountId)
         {
             using var connection = new SqlConnection(_connectionString);
-            using var command = new SqlCommand("EXEC CheckAccountExistence @AccountID", connection);
-            command.Parameters.AddWithValue("@AccountID", accountId);
+            var parameters = new DynamicParameters();
+            parameters.Add("@AccountID", accountId, DbType.String, size: 20);
 
             await connection.OpenAsync();
-            var result = await command.ExecuteScalarAsync();
-            return result != null;
+            var userInfo = await connection.QueryFirstOrDefaultAsync<UserDBInfo>("CheckAccountExistence", parameters, commandType: System.Data.CommandType.StoredProcedure);
+
+            return userInfo;
         }
     }
 
@@ -276,7 +279,6 @@ namespace SimpleFramework
         {
             var response = new ResLogin();
 
-            // Check Redis for existing session
             var existingSession = await RedisManager.GetSessionAsync(request.UserId);
 
             if (!string.IsNullOrEmpty(existingSession))
@@ -287,16 +289,16 @@ namespace SimpleFramework
                 return response;
             }
 
-            var accountExists = await GameDBManager.AccountExistsAsync(request.UserId);
-            //if (!string.IsNullOrEmpty(accountExists))
-            //{
-            //    response.Status = "error";
-            //    response.Message = "User does not exist.";
-            //    response.ProcessRet = -1;
-            //    return response;
-            //}
+            var userInfo = await GameDBManager.AccountExistsAsync(request.UserId);
 
-            // Create new session in Redis
+            if (userInfo == null)
+            {
+                response.Status = "error";
+                response.Message = "Account does not exist.";
+                response.ProcessRet = -1;
+                return response;
+            }
+
             var token = Guid.NewGuid().ToString();
             await RedisManager.SetSessionAsync(request.UserId, token, TimeSpan.FromMinutes(30));
 
