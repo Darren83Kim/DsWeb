@@ -58,6 +58,12 @@ namespace SimpleFramework
             // Add Redis connection multiplexer as singleton
             services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(Configuration["Redis:ConnectionString"]));
 
+            // Add Redis cache for session handling
+            services.AddStackExchangeRedisCache(options =>
+            {
+                options.Configuration = Configuration["Redis:ConnectionString"];
+            });
+
             services.AddSession(options =>
             {
                 options.IdleTimeout = TimeSpan.FromMinutes(30);
@@ -78,13 +84,31 @@ namespace SimpleFramework
             app.UseRouting();
             app.UseSession();
 
+
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();
-                endpoints.MapPost("/", async context =>
+                endpoints.MapPost("api/{controller}", async context =>
                 {
-                    var controller = new SessionController();
-                    await controller.HandleRequest(context);
+                    var controllerName = context.Request.RouteValues["controller"]?.ToString();
+
+                    if (controllerName != null)
+                    {
+                        var controllerType = Type.GetType($"SimpleFramework.{controllerName}Controller");
+                        if (controllerType != null)
+                        {
+                            var controller = Activator.CreateInstance(controllerType);
+                            var method = controllerType.GetMethod("HandleRequest");
+
+                            if (method != null)
+                            {
+                                await (Task)method.Invoke(controller, new object[] { context });
+                                return;
+                            }
+                        }
+                    }
+
+                    context.Response.StatusCode = 404;
                 });
             });
         }
@@ -120,12 +144,13 @@ namespace SimpleFramework
 
     public class UserDBInfo
     {
-        public string UserID { get; set; }
+        public long UserID { get; set; }
+        public string UserName { get; set; }
         public string UserPass { get; set; }
         public int UserPoint { get; set; }
         public int MaxScore { get; set; }
-        public DateTime CreateDate { get; set; }
         public DateTime LetestDate { get; set; } = DateTime.Now;
+        public DateTime CreateDate { get; set; }
     }
 
     public class DBManager
@@ -145,14 +170,14 @@ namespace SimpleFramework
 
     public class GameDBManager : DBManager
     {
-        public static async Task<UserDBInfo> AccountExistsAsync(string accountId)
+        public static async Task<UserDBInfo> AccountExistsAsync(string userName)
         {
             using var connection = new SqlConnection(_connectionString);
             var parameters = new DynamicParameters();
-            parameters.Add("@AccountID", accountId, DbType.String, size: 20);
+            parameters.Add("@UserName", userName, DbType.String, size: 20);
 
             await connection.OpenAsync();
-            var userInfo = await connection.QueryFirstOrDefaultAsync<UserDBInfo>("CheckAccountExistence", parameters, commandType: System.Data.CommandType.StoredProcedure);
+            var userInfo = await connection.QueryFirstOrDefaultAsync<UserDBInfo>("SELECT_USER_INFO", parameters, commandType: System.Data.CommandType.StoredProcedure);
 
             return userInfo;
         }
@@ -179,7 +204,7 @@ namespace SimpleFramework
 
     public class ReqLogin : BaseRequest
     {
-        public ReqLogin() : base("api/auth/Login") { }
+        public ReqLogin() : base("api/Login") { }
 
         public string UserId { get; set; }
         public string UserPass { get; set; }
@@ -187,11 +212,11 @@ namespace SimpleFramework
 
     public class ReqLogOut : BaseRequest
     {
-        public ReqLogOut() : base("api/auth/LogOut") { }
+        public ReqLogOut() : base("api/LogOut") { }
     }
     public class ReqCreateUser : BaseRequest
     {
-        public ReqCreateUser() : base("api/user/CreateUser") { }
+        public ReqCreateUser() : base("api/CreateUser") { }
 
         public string UserId { get; set; }
         public string UserPass { get; set; }
