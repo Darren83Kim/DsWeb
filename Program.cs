@@ -153,13 +153,39 @@ namespace SimpleFramework
         public DateTime CreateDate { get; set; }
     }
 
+    public class DatabaseSettingInfo
+    {
+        public string Ip { get; set; }
+        public string Port { get; set; }
+        public string DatabaseName { get; set; }
+        public string UserId { get; set; }
+        public string Password { get; set; }
+        public string MaxPoolSize { get; set; }
+    }
+
+    public class SqlServerDbSettings
+    {
+        public Dictionary<string, DatabaseSettingInfo> ConnectInfos { get; set; }
+    }
+
     public class DBManager
     {
         protected static string _connectionString;
 
         public static void Initialize(IConfiguration configuration)
         {
-            _connectionString = $"Server={configuration["Database:Ip"]},{configuration["Database:Port"]};Database={configuration["Database:DatabaseName"]};User Id={configuration["Database:UserId"]};Password={configuration["Database:Password"]};";
+            var dbSettings = configuration.GetSection("SqlServerDbSettings:ConnectionInfos:CommonDbService");
+            var ip = dbSettings["Ip"];
+            var port = dbSettings["Port"];
+            var dbName = dbSettings["DatabaseName"];
+            var userId = dbSettings["UserId"];
+            var password = dbSettings["Password"];
+            var maxPoolSize = dbSettings["MaxPoolSize"];
+
+            _connectionString = $"Server={ip},{port};Database={dbName};User Id={userId};Password={password};Max Pool Size={maxPoolSize};TrustServerCertificate=True;";
+
+
+            //_connectionString = $"Server={configuration["Database:Ip"]},{configuration["Database:Port"]};Database={configuration["Database:DatabaseName"]};User Id={configuration["Database:UserId"]};Password={configuration["Database:Password"]};";
         }
 
         public SqlConnection GetConnection()
