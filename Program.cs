@@ -14,6 +14,8 @@ using System.Threading.Tasks;
 using Dapper;
 using System.Data;
 using SimpleFramework;
+using Microsoft.Identity.Client;
+using System.Runtime.CompilerServices;
 
 namespace SimpleFramework
 {
@@ -193,20 +195,41 @@ namespace SimpleFramework
         {
             return new SqlConnection(_connectionString);
         }
+
+        public static async Task<T?> ExecuteQuery<T>(string query, DynamicParameters parameters)
+        {
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+            
+            return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, commandType: System.Data.CommandType.StoredProcedure);
+        }
+
+        public static async Task<bool> ExecuteQuery(string query, DynamicParameters parameters)
+        {
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+            var result = await connection.ExecuteAsync(query, parameters, commandType: System.Data.CommandType.StoredProcedure);
+            return result > 0;
+        }
     }
 
     public class GameDBManager : DBManager
     {
-        public static async Task<UserDBInfo> AccountExistsAsync(string userName)
+        public static async Task<UserDBInfo?> SelectUserInfo(string userName)
         {
-            using var connection = new SqlConnection(_connectionString);
             var parameters = new DynamicParameters();
             parameters.Add("@UserName", userName, DbType.String, size: 20);
 
-            await connection.OpenAsync();
-            var userInfo = await connection.QueryFirstOrDefaultAsync<UserDBInfo>("SELECT_USER_INFO", parameters, commandType: System.Data.CommandType.StoredProcedure);
+            return await ExecuteQuery<UserDBInfo>("SELECT_USER_INFO", parameters);
+        }
 
-            return userInfo;
+        public static async Task<bool> InsertUserInfo(string userName, string userPass)
+        {
+            var parameters = new DynamicParameters();
+            parameters.Add("@UserName", userName, DbType.String, size: 20);
+            parameters.Add("@UserPass", userPass, DbType.String, size: 20);
+
+            return await ExecuteQuery("INSERT_USER_INFO", parameters);
         }
     }
 
@@ -275,6 +298,23 @@ namespace SimpleFramework
         UserAlreadyLoggedIn  = -100,
         UserNotFindDBInfo    = -101,
         UserAlreadyExistInfo = -102,
+    }
+
+    public class GameException : Exception
+    {
+        public override string Message { get; }
+        public ResultCode ResultCode;
+
+        public GameException(ResultCode resultCode, string message, [CallerMemberName] string method = null, [CallerLineNumber] int lineNumber = 0)
+        {
+            var errorMessage = new Dictionary<string, string>();
+            errorMessage.Add("message", message);
+            errorMessage.Add("method", method);
+            errorMessage.Add("lineNumber", lineNumber.ToString());
+
+            Message = JsonSerializer.Serialize(errorMessage);
+            ResultCode = resultCode;
+        }
     }
 
     public abstract class BaseController<TRequest, TResponse>
@@ -346,7 +386,7 @@ namespace SimpleFramework
             if (!string.IsNullOrEmpty(existingSession))
                 return SendResponse(response, ResultCode.UserAlreadyLoggedIn);
 
-            var userInfo = await GameDBManager.AccountExistsAsync(request.UserName);
+            var userInfo = await GameDBManager.SelectUserInfo(request.UserName);
             if (userInfo == null)
                 return SendResponse(response, ResultCode.UserNotFindDBInfo);
 
@@ -368,11 +408,17 @@ namespace SimpleFramework
             if (!string.IsNullOrEmpty(existingSession))
                 return SendResponse(response, ResultCode.UserAlreadyLoggedIn);
 
-            var userInfo = await GameDBManager.AccountExistsAsync(request.UserName);
-            if (userInfo != null)
+            var userInfo = await GameDBManager.SelectUserInfo(request.UserName);
+            if (userInfo == null)
+            {
+                if (!await GameDBManager.InsertUserInfo(request.UserName, request.UserPass))
+                    throw new GameException(ResultCode.Fail, "Failed to insert user info");
+
+                userInfo = await GameDBManager.SelectUserInfo(request.UserName);
+            }
+            else
                 return SendResponse(response, ResultCode.UserAlreadyExistInfo);
 
-            //여기서 추가 
 
             var token = Guid.NewGuid().ToString();
             await RedisManager.SetSessionAsync(request.UserName, token, TimeSpan.FromMinutes(30));
