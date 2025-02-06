@@ -5,6 +5,8 @@ VisualStudioVersion = 17.11.35327.3
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DsWebServer", "DsWebServer.csproj", "{175E919E-D5AD-4D9C-8719-4FE525990E20}"
 EndProject
+Project("{00D1A9C2-B5F0-4AF3-8072-F6C62B433612}") = "DsDB", "..\..\DsDataBase\DsDB\DsDB.sqlproj", "{EAD45A58-1D09-44E7-8E1B-BEE0A8A4EFBE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,12 @@ Global
 		{175E919E-D5AD-4D9C-8719-4FE525990E20}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{175E919E-D5AD-4D9C-8719-4FE525990E20}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{175E919E-D5AD-4D9C-8719-4FE525990E20}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EAD45A58-1D09-44E7-8E1B-BEE0A8A4EFBE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EAD45A58-1D09-44E7-8E1B-BEE0A8A4EFBE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EAD45A58-1D09-44E7-8E1B-BEE0A8A4EFBE}.Debug|Any CPU.Deploy.0 = Debug|Any CPU
+		{EAD45A58-1D09-44E7-8E1B-BEE0A8A4EFBE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EAD45A58-1D09-44E7-8E1B-BEE0A8A4EFBE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EAD45A58-1D09-44E7-8E1B-BEE0A8A4EFBE}.Release|Any CPU.Deploy.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

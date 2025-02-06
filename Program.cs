@@ -13,6 +13,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Dapper;
 using System.Data;
+using SimpleFramework;
 
 namespace SimpleFramework
 {
@@ -158,7 +159,7 @@ namespace SimpleFramework
         public string Ip { get; set; }
         public string Port { get; set; }
         public string DatabaseName { get; set; }
-        public string UserId { get; set; }
+        public string UserName { get; set; }
         public string Password { get; set; }
         public string MaxPoolSize { get; set; }
     }
@@ -178,14 +179,14 @@ namespace SimpleFramework
             var ip = dbSettings["Ip"];
             var port = dbSettings["Port"];
             var dbName = dbSettings["DatabaseName"];
-            var userId = dbSettings["UserId"];
+            var userId = dbSettings["UserName"];
             var password = dbSettings["Password"];
             var maxPoolSize = dbSettings["MaxPoolSize"];
 
             _connectionString = $"Server={ip},{port};Database={dbName};User Id={userId};Password={password};Max Pool Size={maxPoolSize};TrustServerCertificate=True;";
 
 
-            //_connectionString = $"Server={configuration["Database:Ip"]},{configuration["Database:Port"]};Database={configuration["Database:DatabaseName"]};User Id={configuration["Database:UserId"]};Password={configuration["Database:Password"]};";
+            //_connectionString = $"Server={configuration["Database:Ip"]},{configuration["Database:Port"]};Database={configuration["Database:DatabaseName"]};User Id={configuration["Database:UserName"]};Password={configuration["Database:Password"]};";
         }
 
         public SqlConnection GetConnection()
@@ -232,7 +233,7 @@ namespace SimpleFramework
     {
         public ReqLogin() : base("api/Login") { }
 
-        public string UserId { get; set; }
+        public string UserName { get; set; }
         public string UserPass { get; set; }
     }
 
@@ -244,20 +245,18 @@ namespace SimpleFramework
     {
         public ReqCreateUser() : base("api/CreateUser") { }
 
-        public string UserId { get; set; }
+        public string UserName { get; set; }
         public string UserPass { get; set; }
     }
 
     public class BaseResponse
     {
-        public string Status { get; set; } = string.Empty;
-        public string Message { get; set; } = string.Empty;
+        public int ResultCode { get; set; } = 0;
     }
 
     public class ResLogin : BaseResponse
     {
         public string Token { get; set; }
-        public int ProcessRet { get; set; } = 0;
     }
 
     public class ResLogOut : BaseResponse
@@ -266,7 +265,16 @@ namespace SimpleFramework
 
     public class ResCreateUser : BaseResponse
     {
-        public int ProcessRet { get; set; } = 0;
+    }
+
+    public enum ResultCode
+    {
+        Success = 0,
+        Fail    = -1,
+
+        UserAlreadyLoggedIn  = -100,
+        UserNotFindDBInfo    = -101,
+        UserAlreadyExistInfo = -102,
     }
 
     public abstract class BaseController<TRequest, TResponse>
@@ -274,6 +282,12 @@ namespace SimpleFramework
         where TResponse : BaseResponse, new()
     {
         public abstract Task<TResponse> Process(TRequest request);
+
+        public TResponse SendResponse(TResponse response, ResultCode resultCode = ResultCode.Success)
+        {
+            response.ResultCode = (int)resultCode;
+            return response;
+        }
 
         public async Task HandleRequest(HttpContext context)
         {
@@ -286,8 +300,7 @@ namespace SimpleFramework
                 {
                     var errorResponse = new TResponse
                     {
-                        Status = "error",
-                        Message = "Invalid request format"
+                        ResultCode = -1
                     };
                     context.Response.StatusCode = 400;
                     await context.Response.WriteAsJsonAsync(errorResponse);
@@ -301,8 +314,7 @@ namespace SimpleFramework
             {
                 var errorResponse = new TResponse
                 {
-                    Status = "error",
-                    Message = ex.Message
+                    ResultCode = -1
                 };
                 context.Response.StatusCode = 500;
                 await context.Response.WriteAsJsonAsync(errorResponse);
@@ -314,11 +326,10 @@ namespace SimpleFramework
     {
         public override async Task<BaseResponse> Process(BaseRequest request)
         {
-            var response = new BaseResponse
-            {
-                Status = "success",
-                Message = "Session processed"
-            };
+            var response = new BaseResponse();
+            //{
+            //    ResultCode = 0
+            //};
 
             return await Task.FromResult(response);
         }
@@ -330,34 +341,42 @@ namespace SimpleFramework
         {
             var response = new ResLogin();
 
-            var existingSession = await RedisManager.GetSessionAsync(request.UserId);
+            var existingSession = await RedisManager.GetSessionAsync(request.UserName);
 
             if (!string.IsNullOrEmpty(existingSession))
-            {
-                response.Status = "error";
-                response.Message = "User is already logged in.";
-                response.ProcessRet = -1;
-                return response;
-            }
+                return SendResponse(response, ResultCode.UserAlreadyLoggedIn);
 
-            var userInfo = await GameDBManager.AccountExistsAsync(request.UserId);
-
+            var userInfo = await GameDBManager.AccountExistsAsync(request.UserName);
             if (userInfo == null)
-            {
-                response.Status = "error";
-                response.Message = "Account does not exist.";
-                response.ProcessRet = -1;
-                return response;
-            }
+                return SendResponse(response, ResultCode.UserNotFindDBInfo);
 
             var token = Guid.NewGuid().ToString();
-            await RedisManager.SetSessionAsync(request.UserId, token, TimeSpan.FromMinutes(30));
-
-            response.Status = "success";
-            response.Message = "Login successful.";
+            await RedisManager.SetSessionAsync(request.UserName, token, TimeSpan.FromMinutes(30));
+            
             response.Token = token;
 
-            return response;
+            return SendResponse(response);
+        }
+    }
+
+    public class CreateUser : BaseController<ReqCreateUser, ResCreateUser>
+    {
+        public override async Task<ResCreateUser> Process(ReqCreateUser request)
+        {
+            var response = new ResCreateUser();
+            var existingSession = await RedisManager.GetSessionAsync(request.UserName);
+            if (!string.IsNullOrEmpty(existingSession))
+                return SendResponse(response, ResultCode.UserAlreadyLoggedIn);
+
+            var userInfo = await GameDBManager.AccountExistsAsync(request.UserName);
+            if (userInfo != null)
+                return SendResponse(response, ResultCode.UserAlreadyExistInfo);
+
+            //여기서 추가 
+
+            var token = Guid.NewGuid().ToString();
+            await RedisManager.SetSessionAsync(request.UserName, token, TimeSpan.FromMinutes(30));
+            return SendResponse(response);
         }
     }
 
@@ -367,8 +386,8 @@ namespace SimpleFramework
         {
             var response = new ResLogOut
             {
-                Status = "success",
-                Message = "Logout successful"
+                //Status = "success",
+                //Message = "Logout successful"
             };
 
             return await Task.FromResult(response);
