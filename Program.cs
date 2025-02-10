@@ -117,6 +117,26 @@ namespace SimpleFramework
         }
     }
 
+    public static class LogManager
+    {
+        private static string _logDirectory = "Logs";
+        public enum LogLevel { Debug, Info, Warning, Error, Fatal }
+
+        static LogManager()
+        {
+            if (!Directory.Exists(_logDirectory))
+                Directory.CreateDirectory(_logDirectory);
+        }
+
+        public static void Log(string message, LogLevel level = LogLevel.Debug)
+        {
+            string logFilePath = Path.Combine(_logDirectory, $"log_{DateTime.UtcNow:yyyyMMdd HHmmss}.txt");
+            string logEntry = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] [{level}] {message}";
+            Console.WriteLine(logEntry);
+            File.AppendAllText(logFilePath, logEntry + Environment.NewLine);
+        }
+    }
+
     public class RedisManager
     {
         private static IConnectionMultiplexer _redis;
@@ -150,6 +170,7 @@ namespace SimpleFramework
         public long UserID { get; set; }
         public string UserName { get; set; }
         public string UserPass { get; set; }
+        public int CharType { get; set; }
         public int UserPoint { get; set; }
         public int MaxScore { get; set; }
         public DateTime LetestDate { get; set; } = DateTime.Now;
@@ -181,13 +202,22 @@ namespace SimpleFramework
             var ip = dbSettings["Ip"];
             var port = dbSettings["Port"];
             var dbName = dbSettings["DatabaseName"];
-            var userId = dbSettings["UserName"];
+            var userId = dbSettings["UserId"];
             var password = dbSettings["Password"];
             var maxPoolSize = dbSettings["MaxPoolSize"];
 
-            _connectionString = $"Server={ip},{port};Database={dbName};User Id={userId};Password={password};Max Pool Size={maxPoolSize};TrustServerCertificate=True;";
+            if (string.IsNullOrEmpty(ip) || string.IsNullOrEmpty(port) || string.IsNullOrEmpty(dbName) ||
+                string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(password))
+            {
+                LogManager.Log("[DBManager] Database connection settings are missing or invalid.", LogManager.LogLevel.Error);
+                throw new Exception("Database connection settings are missing or invalid.");
+            }
 
+            _connectionString = $"Server={ip},{port};Database={dbName};User Id={userId};Password={password};Max Pool Size={maxPoolSize};Encrypt=False;TrustServerCertificate=True;";
 
+            Console.WriteLine($"[DBManager] Connection String: {_connectionString}");
+
+            //_connectionString = $"Server={ip},{port};database={dbName};uid={userId};pwd={password};Max Pool Size={maxPoolSize};TrustServerCertificate=True;";
             //_connectionString = $"Server={configuration["Database:Ip"]},{configuration["Database:Port"]};Database={configuration["Database:DatabaseName"]};User Id={configuration["Database:UserName"]};Password={configuration["Database:Password"]};";
         }
 
@@ -198,18 +228,35 @@ namespace SimpleFramework
 
         public static async Task<T?> ExecuteQuery<T>(string query, DynamicParameters parameters)
         {
-            using var connection = new SqlConnection(_connectionString);
-            await connection.OpenAsync();
-            
-            return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, commandType: System.Data.CommandType.StoredProcedure);
+            try
+            {
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+                LogManager.Log($"Executing Query: {query} {string.Join(", ", parameters.ParameterNames.ToList())}", LogManager.LogLevel.Info);
+                return await connection.QueryFirstOrDefaultAsync<T>(query, parameters, commandType: System.Data.CommandType.StoredProcedure);
+            }
+            catch (Exception ex)
+            {
+                throw new GameException(ResultCode.DBError, $"Failed to execute query: {query}, {ex.Message}");
+            }   
+
         }
 
         public static async Task<bool> ExecuteQuery(string query, DynamicParameters parameters)
         {
-            using var connection = new SqlConnection(_connectionString);
-            await connection.OpenAsync();
-            var result = await connection.ExecuteAsync(query, parameters, commandType: System.Data.CommandType.StoredProcedure);
-            return result > 0;
+            try
+            {
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+                LogManager.Log($"Executing Query: {query} {string.Join(", ", parameters.ParameterNames.ToList())}", LogManager.LogLevel.Info);
+                var result = await connection.ExecuteAsync(query, parameters, commandType: System.Data.CommandType.StoredProcedure);
+                return result > 0;
+            }
+            catch (Exception ex)
+            {
+                throw new GameException(ResultCode.DBError, $"Failed to execute query: {query}, {ex.Message}");
+            }   
+
         }
     }
 
@@ -218,16 +265,17 @@ namespace SimpleFramework
         public static async Task<UserDBInfo?> SelectUserInfo(string userName)
         {
             var parameters = new DynamicParameters();
-            parameters.Add("@UserName", userName, DbType.String, size: 20);
+            parameters.Add("@userName", userName, DbType.String);
 
             return await ExecuteQuery<UserDBInfo>("SELECT_USER_INFO", parameters);
         }
 
-        public static async Task<bool> InsertUserInfo(string userName, string userPass)
+        public static async Task<bool> InsertUserInfo(string userName, string userPass, int charType)
         {
             var parameters = new DynamicParameters();
-            parameters.Add("@UserName", userName, DbType.String, size: 20);
-            parameters.Add("@UserPass", userPass, DbType.String, size: 20);
+            parameters.Add("@userName", userName, DbType.String);
+            parameters.Add("@userPass", userPass, DbType.String);
+            parameters.Add("@charType", charType, DbType.Int32);
 
             return await ExecuteQuery("INSERT_USER_INFO", parameters);
         }
@@ -242,13 +290,13 @@ namespace SimpleFramework
 
     public class BaseRequest
     {
-        public string Token { get; set; } = string.Empty;
-        public int Sequence { get; set; } = 0;
-        public string Url { get; set; }
+        public string token { get; set; } = string.Empty;
+        public int sequence { get; set; } = 0;
+        public string url { get; set; }
 
-        public BaseRequest(string url)
+        public BaseRequest(string val)
         {
-            Url = url;
+            url = val;
         }
     }
 
@@ -256,8 +304,8 @@ namespace SimpleFramework
     {
         public ReqLogin() : base("api/Login") { }
 
-        public string UserName { get; set; }
-        public string UserPass { get; set; }
+        public string userName { get; set; }
+        public string userPass { get; set; }
     }
 
     public class ReqLogOut : BaseRequest
@@ -268,18 +316,19 @@ namespace SimpleFramework
     {
         public ReqCreateUser() : base("api/CreateUser") { }
 
-        public string UserName { get; set; }
-        public string UserPass { get; set; }
+        public string userName { get; set; }
+        public string userPass { get; set; }
+        public int charType { get; set; }
     }
 
     public class BaseResponse
     {
-        public int ResultCode { get; set; } = 0;
+        public int resultCode { get; set; } = 0;
     }
 
     public class ResLogin : BaseResponse
     {
-        public string Token { get; set; }
+        public string token { get; set; }
     }
 
     public class ResLogOut : BaseResponse
@@ -294,6 +343,8 @@ namespace SimpleFramework
     {
         Success = 0,
         Fail    = -1,
+
+        DBError = -10,  
 
         UserAlreadyLoggedIn  = -100,
         UserNotFindDBInfo    = -101,
@@ -314,6 +365,8 @@ namespace SimpleFramework
 
             Message = JsonSerializer.Serialize(errorMessage);
             ResultCode = resultCode;
+
+            LogManager.Log($"[Exception] [{Message}], retCode:[{ResultCode}]", LogManager.LogLevel.Fatal);
         }
     }
 
@@ -325,7 +378,7 @@ namespace SimpleFramework
 
         public TResponse SendResponse(TResponse response, ResultCode resultCode = ResultCode.Success)
         {
-            response.ResultCode = (int)resultCode;
+            response.resultCode = (int)resultCode;
             return response;
         }
 
@@ -340,7 +393,7 @@ namespace SimpleFramework
                 {
                     var errorResponse = new TResponse
                     {
-                        ResultCode = -1
+                        resultCode = -1
                     };
                     context.Response.StatusCode = 400;
                     await context.Response.WriteAsJsonAsync(errorResponse);
@@ -354,7 +407,7 @@ namespace SimpleFramework
             {
                 var errorResponse = new TResponse
                 {
-                    ResultCode = -1
+                    resultCode = -1
                 };
                 context.Response.StatusCode = 500;
                 await context.Response.WriteAsJsonAsync(errorResponse);
@@ -381,47 +434,46 @@ namespace SimpleFramework
         {
             var response = new ResLogin();
 
-            var existingSession = await RedisManager.GetSessionAsync(request.UserName);
-
+            var existingSession = await RedisManager.GetSessionAsync(request.userName);
             if (!string.IsNullOrEmpty(existingSession))
                 return SendResponse(response, ResultCode.UserAlreadyLoggedIn);
 
-            var userInfo = await GameDBManager.SelectUserInfo(request.UserName);
+            var userInfo = await GameDBManager.SelectUserInfo(request.userName);
             if (userInfo == null)
                 return SendResponse(response, ResultCode.UserNotFindDBInfo);
 
             var token = Guid.NewGuid().ToString();
-            await RedisManager.SetSessionAsync(request.UserName, token, TimeSpan.FromMinutes(30));
+            await RedisManager.SetSessionAsync(request.userName, token, TimeSpan.FromMinutes(30));
             
-            response.Token = token;
+            response.token = token;
 
             return SendResponse(response);
         }
     }
 
-    public class CreateUser : BaseController<ReqCreateUser, ResCreateUser>
+    public class CreateUserController : BaseController<ReqCreateUser, ResCreateUser>
     {
         public override async Task<ResCreateUser> Process(ReqCreateUser request)
         {
             var response = new ResCreateUser();
-            var existingSession = await RedisManager.GetSessionAsync(request.UserName);
+            var existingSession = await RedisManager.GetSessionAsync(request.userName);
             if (!string.IsNullOrEmpty(existingSession))
                 return SendResponse(response, ResultCode.UserAlreadyLoggedIn);
 
-            var userInfo = await GameDBManager.SelectUserInfo(request.UserName);
+            var userInfo = await GameDBManager.SelectUserInfo(request.userName);
             if (userInfo == null)
             {
-                if (!await GameDBManager.InsertUserInfo(request.UserName, request.UserPass))
+                if (!await GameDBManager.InsertUserInfo(request.userName, request.userPass, request.charType))
                     throw new GameException(ResultCode.Fail, "Failed to insert user info");
 
-                userInfo = await GameDBManager.SelectUserInfo(request.UserName);
+                //userInfo = await GameDBManager.SelectUserInfo(request.userName);
             }
             else
                 return SendResponse(response, ResultCode.UserAlreadyExistInfo);
 
 
-            var token = Guid.NewGuid().ToString();
-            await RedisManager.SetSessionAsync(request.UserName, token, TimeSpan.FromMinutes(30));
+            //var token = Guid.NewGuid().ToString();
+            //await RedisManager.SetSessionAsync(request.userName, token, TimeSpan.FromMinutes(30));
             return SendResponse(response);
         }
     }
